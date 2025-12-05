@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: code-indexer-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - code-indexer
+
+  code-indexer:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: code-indexer
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - ES_INDEX=code-index
+      - REPOS_PATH=/repos
+      - GIT_ORG=${GIT_ORG:-myorg}
+      - GIT_REPOS=${GIT_REPOS:-repo1,repo2,repo3}
+      - GIT_URL_FORMAT=${GIT_URL_FORMAT:-git@github.com:{org}/{repo}.git}
+      - GIT_TOKEN=${GIT_TOKEN:-}
+      - INDEX_INTERVAL=5m
+      - HTTP_ADDR=:8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - repos:/repos
+      - ${SSH_KEY_PATH:-$HOME/.ssh}:/root/.ssh:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    command: ["-mode", "serve"]
+    networks:
+      - code-indexer
+
+volumes:
+  es-data:
+    driver: local
+  repos:
+    driver: local
+
+networks:
+  code-indexer:
+    driver: bridge

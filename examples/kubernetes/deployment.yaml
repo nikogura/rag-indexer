@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-indexer
+  labels:
+    app: code-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: code-indexer
+  template:
+    metadata:
+      labels:
+        app: code-indexer
+    spec:
+      containers:
+      - name: code-indexer
+        image: code-indexer:latest
+        imagePullPolicy: IfNotPresent
+        args: ["-mode", "serve"]
+        env:
+        - name: ES_HOST
+          value: "http://elasticsearch:9200"
+        - name: ES_INDEX
+          value: "code-index"
+        - name: ES_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-credentials
+              key: username
+              optional: true
+        - name: ES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-credentials
+              key: password
+              optional: true
+        - name: REPOS_PATH
+          value: "/repos"
+        - name: GIT_ORG
+          value: "myorg"
+        - name: GIT_REPOS
+          value: "repo1,repo2,repo3"
+        - name: GIT_URL_FORMAT
+          value: "git@github.com:{org}/{repo}.git"
+        - name: GIT_SSH_KEY_PATH
+          value: "/etc/git-secret/id_ed25519"
+        - name: INDEX_INTERVAL
+          value: "5m"
+        - name: HTTP_ADDR
+          value: ":8080"
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: repos
+          mountPath: /repos
+        - name: git-secret
+          mountPath: /etc/git-secret
+          readOnly: true
+      volumes:
+      - name: repos
+        emptyDir: {}
+      - name: git-secret
+        secret:
+          secretName: git-ssh-key
+          defaultMode: 0400
