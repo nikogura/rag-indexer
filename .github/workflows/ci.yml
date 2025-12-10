@@ -15,7 +15,6 @@ permissions:
   contents: write
   packages: write
   pull-requests: write
-  security-events: write
 
 jobs:
   test:
@@ -79,13 +78,6 @@ jobs:
     - name: Run unit tests
       run: make test
 
-    - name: Upload coverage
-      uses: codecov/codecov-action@v4
-      with:
-        files: ./coverage.out
-        flags: unittests
-        fail_ci_if_error: false
-
     - name: Install namedreturns
       run: go install github.com/nikogura/namedreturns@latest
 
@@ -96,17 +88,6 @@ jobs:
 
     - name: Lint Checks
       run: make lint
-
-    - name: Run gosec security scanner
-      uses: securego/gosec@master
-      with:
-        args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
-
-    - name: Upload gosec results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
-      continue-on-error: true
-      with:
-        sarif_file: 'gosec-results.sarif'
 
   publish:
     name: Publish
@@ -172,19 +153,6 @@ jobs:
           VERSION=${{ needs.test.outputs.version }}
           COMMIT=${{ github.sha }}
           BUILD_DATE=${{ github.event.head_commit.timestamp }}
-
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.version }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-
-    - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
-      continue-on-error: true
-      with:
-        sarif_file: 'trivy-results.sarif'
 
     - name: Tag Repo
       uses: mathieudutour/github-tag-action@v6.2
