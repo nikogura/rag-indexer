@@ -8,8 +8,6 @@ on:
 
 env:
   GO_VERSION: '1.25'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 permissions:
   contents: write
@@ -101,59 +99,6 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: ${{ env.GO_VERSION }}
-
-    - name: Build binary
-      run: |
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o code-indexer-linux-amd64 .
-
-        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
-          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o code-indexer-linux-arm64 .
-
-        CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
-          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o code-indexer-darwin-amd64 .
-
-        CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
-          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o code-indexer-darwin-arm64 .
-
-        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
-          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o code-indexer-windows-amd64.exe .
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: |
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.version }}
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        build-args: |
-          VERSION=${{ needs.test.outputs.version }}
-          COMMIT=${{ github.sha }}
-          BUILD_DATE=${{ github.event.head_commit.timestamp }}
-
     - name: Tag Repo
       uses: mathieudutour/github-tag-action@v6.2
       with:
@@ -168,25 +113,3 @@ jobs:
         draft: false
         prerelease: false
         token: ${{ secrets.GITHUB_TOKEN }}
-        files: |
-          code-indexer-linux-amd64
-          code-indexer-linux-arm64
-          code-indexer-darwin-amd64
-          code-indexer-darwin-arm64
-          code-indexer-windows-amd64.exe
-        body: |
-          ## Installation
-
-          ### Docker
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.version }}
-          ```
-
-          ### Binary
-          Download the appropriate binary for your platform from the assets below.
-
-          ### Kubernetes
-          See [examples/kubernetes/](examples/kubernetes/) for deployment manifests.
-
-          ## Changes
-          See commit history for detailed changes.
