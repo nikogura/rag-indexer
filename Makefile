@@ -1,4 +1,4 @@
-.PHONY: build clean lint test install-tools help
+.PHONY: build clean lint test install-tools help docker-build
 
 # Build variables
 BINARY_NAME=code-indexer
@@ -60,5 +60,8 @@ run-serve: build ## Build and run in serve mode
 
 run-index: build ## Build and run in index mode
 	./$(BINARY_NAME) -mode index
+
+docker-build: ## Build Docker image
+	docker build -t $(BINARY_NAME):latest .
 
 all: clean tidy lint test build ## Clean, tidy, lint, test, and build

@@ -1,0 +1,224 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: '1.25'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.semver.outputs.version_tag }}
+      version: ${{ steps.semver.outputs.version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate Version
+      run: |
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "Last tag: $LAST_TAG"
+
+        # Extract version numbers
+        VERSION=${LAST_TAG#v}
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+        # Increment patch version
+        PATCH=$((PATCH + 1))
+        NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+
+        echo "New version: $NEW_VERSION"
+        echo "version_tag=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "version=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+      id: semver
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Cache Docker layers
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run unit tests
+      run: make test
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.out
+        flags: unittests
+        fail_ci_if_error: false
+
+    - name: Install namedreturns
+      run: go install github.com/nikogura/namedreturns@latest
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: latest
+
+    - name: Lint Checks
+      run: make lint
+
+    - name: Run gosec security scanner
+      uses: securego/gosec@master
+      with:
+        args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
+
+    - name: Upload gosec results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      continue-on-error: true
+      with:
+        sarif_file: 'gosec-results.sarif'
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Build binary
+      run: |
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o code-indexer-linux-amd64 .
+
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o code-indexer-linux-arm64 .
+
+        CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o code-indexer-darwin-amd64 .
+
+        CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o code-indexer-darwin-arm64 .
+
+        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+          -ldflags "-s -w -X main.version=${{ needs.test.outputs.version }} -X main.commit=${{ github.sha }} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o code-indexer-windows-amd64.exe .
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.version }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          VERSION=${{ needs.test.outputs.version }}
+          COMMIT=${{ github.sha }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.version }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      continue-on-error: true
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Tag Repo
+      uses: mathieudutour/github-tag-action@v6.2
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        custom_tag: ${{ needs.test.outputs.version_tag }}
+
+    - name: Publish Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ needs.test.outputs.version_tag }}
+        name: ${{ needs.test.outputs.version_tag }}
+        draft: false
+        prerelease: false
+        token: ${{ secrets.GITHUB_TOKEN }}
+        files: |
+          code-indexer-linux-amd64
+          code-indexer-linux-arm64
+          code-indexer-darwin-amd64
+          code-indexer-darwin-arm64
+          code-indexer-windows-amd64.exe
+        body: |
+          ## Installation
+
+          ### Docker
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.version }}
+          ```
+
+          ### Binary
+          Download the appropriate binary for your platform from the assets below.
+
+          ### Kubernetes
+          See [examples/kubernetes/](examples/kubernetes/) for deployment manifests.
+
+          ## Changes
+          See commit history for detailed changes.
